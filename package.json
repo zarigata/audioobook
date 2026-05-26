@@ -1,0 +1,24 @@
+{
+  "name": "audioobook",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^5.0.0",
+    "epubjs": "^0.3.93",
+    "mammoth": "^1.8.0",
+    "@diffusionstudio/vits-web": "^1.0.0",
+    "@breezystack/lamejs": "^1.2.7"
+  },
+  "devDependencies": {
+    "vite": "^6.3.0",
+    "vitest": "^3.1.0"
+  }
+}
