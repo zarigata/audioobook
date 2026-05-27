@@ -1,12 +1,12 @@
-// NeuralTTS — Piper TTS via @diffusionstudio/vits-web for quality mode
-// Portuguese voices: pt_BR-edresson-medium, pt_BR-faber-medium, pt_BR-juliette-medium
+// NeuralTTS — Piper TTS via @diffusionstudio/vits-web
+// predict() returns a WAV Blob — must decode properly for playback/encoding
 
 const DEFAULT_VOICE = 'pt_BR-faber-medium';
 
 const VOICE_OPTIONS = [
   { id: 'pt_BR-faber-medium', label: 'Faber (masculino)' },
-  { id: 'pt_BR-edresson-medium', label: 'Edresson (masculino)' },
-  { id: 'pt_BR-juliette-medium', label: 'Juliette (feminino)' },
+  { id: 'pt_BR-edresson-low', label: 'Edresson (masculino)' },
+  { id: 'pt_PT-tugão-medium', label: 'Tugão (Portugal)' },
 ];
 
 export class NeuralTTS {
@@ -27,7 +27,7 @@ export class NeuralTTS {
 
   set voiceId(id) {
     this._voiceId = id;
-    this._modelReady = false; // need to re-download if different voice
+    this._modelReady = false;
   }
 
   get voiceId() {
@@ -42,87 +42,51 @@ export class NeuralTTS {
     return this._speed;
   }
 
-  /**
-   * Initialize: lazy-load the vits-web library
-   */
   async init() {
     if (this._tts) return;
-
     const vits = await import('@diffusionstudio/vits-web');
     this._tts = vits;
   }
 
-  /**
-   * Download the selected voice model (with progress)
-   * @param {(progress: number) => void} onProgress - 0 to 1
-   */
   async downloadVoice(onProgress = () => {}) {
     await this.init();
-
     await this._tts.download(this._voiceId, (event) => {
       if (event.total > 0) {
         onProgress(event.loaded / event.total);
       }
     });
-
     this._modelReady = true;
   }
 
-  /**
-   * Check which voices are already cached locally
-   * @returns {Promise<string[]>}
-   */
   async getCachedVoices() {
     await this.init();
-    const stored = await this._tts.stored();
-    return stored;
+    return this._tts.stored();
   }
 
   /**
-   * Generate audio for a single text segment
-   * @param {string} text
-   * @returns {Promise<Float32Array>} PCM audio data at 22050Hz
+   * Generate audio for one text segment.
+   * @returns {Promise<Blob>} WAV Blob from Piper
    */
   async generate(text) {
     if (!this._modelReady) {
       throw new Error('Modelo não carregado. Chame downloadVoice() primeiro.');
     }
-
-    const result = await this._tts.predict({
-      text,
-      voiceId: this._voiceId,
-    });
-
-    // predict returns Blob, ArrayBuffer, or AudioBuffer depending on version
-    if (result instanceof Float32Array) return result;
-    if (result instanceof ArrayBuffer) return new Float32Array(result);
-    if (result instanceof Blob) {
-      const buffer = await result.arrayBuffer();
-      return new Float32Array(buffer);
-    }
-    // AudioBuffer
-    if (result && result.getChannelData) {
-      return result.getChannelData(0);
-    }
-
-    throw new Error('Formato de áudio inesperado do Piper');
+    return this._tts.predict({ text, voiceId: this._voiceId });
   }
 
   /**
-   * Generate audio for multiple segments sequentially
+   * Generate WAV Blobs for multiple segments.
    * @param {string[]} segments
-   * @param {(index: number, total: number, audio: Float32Array) => void} onProgress
-   * @returns {Promise<Float32Array[]>}
+   * @param {(index: number, total: number) => void} onProgress
+   * @returns {Promise<Blob[]>} Array of WAV Blobs
    */
   async generateAll(segments, onProgress = () => {}) {
-    const results = [];
-
+    const blobs = [];
     for (let i = 0; i < segments.length; i++) {
-      const audio = await this.generate(segments[i]);
-      results.push(audio);
-      onProgress(i + 1, segments.length, audio);
+      const wav = await this.generate(segments[i]);
+      blobs.push(wav);
+      onProgress(i + 1, segments.length);
     }
-
-    return results;
+    return blobs;
   }
 }

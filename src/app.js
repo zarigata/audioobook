@@ -1,8 +1,7 @@
-import { createUploadUI, detectFormat } from './ui/upload.js';
+import { createUploadUI } from './ui/upload.js';
 import { parseDocument } from './parsers/index.js';
 import { segmentText, splitIntoChunks } from './utils/segmenter.js';
 import { BrowserTTS } from './tts/browser-tts.js';
-import { NeuralTTS } from './tts/neural-tts.js';
 import { TTSWorkerManager } from './tts/worker-manager.js';
 import { AudioPlayer } from './audio/player.js';
 import { encodeMp3, encodeWav, concatenateAudio, downloadBlob } from './audio/encoder.js';
@@ -10,7 +9,6 @@ import strings from './ui/i18n.js';
 
 const STATES = {
   IDLE: 'idle',
-  FILE_SELECTED: 'file_selected',
   PARSING: 'parsing',
   MODE_SELECT: 'mode_select',
   GENERATING: 'generating',
@@ -28,34 +26,24 @@ export class App {
     this.rawText = '';
     this.segments = [];
     this.chunks = [];
-    this.audioSegments = [];
-    this.mode = null; // 'fast' or 'quality'
+    this.wavBlobs = [];
+    this.mode = null;
     this.browserTTS = null;
-    this.neuralTTS = null;
     this.worker = null;
     this.player = new AudioPlayer();
-    this._abortController = null;
   }
 
-  /**
-   * Mount the app into the page
-   */
   mount() {
     this.uploadArea = document.getElementById('upload-area');
     this.playerArea = document.getElementById('player-area');
     this.progressArea = document.getElementById('progress-area');
-
     this._showUpload();
   }
-
-  // ── State transitions ──
 
   _setState(newState) {
     this.state = newState;
     this._render();
   }
-
-  // ── Upload ──
 
   _showUpload() {
     this.playerArea.style.display = 'none';
@@ -68,8 +56,6 @@ export class App {
       this._parseFile();
     });
   }
-
-  // ── Parsing ──
 
   async _parseFile() {
     this._setState(STATES.PARSING);
@@ -93,18 +79,14 @@ export class App {
     }
   }
 
-  // ── Mode selection ──
-
   _renderModeSelect() {
     this.uploadArea.style.display = 'none';
     this.playerArea.style.display = 'none';
     this.progressArea.style.display = '';
 
-    const info = `${this.file.name} — ${this.chunks.length} ${strings.progress.segments.replace('{count}', '')}`;
-
     this.progressArea.innerHTML = `
       <div class="mode-select">
-        <p class="mode-info">${this._esc(info)} — ${this.chunks.length} segmentos</p>
+        <p class="mode-info">${this._esc(this.file.name)} — ${this.chunks.length} segmentos</p>
         <h3>${strings.mode.select}</h3>
         <div class="mode-buttons">
           <button class="mode-btn" data-mode="fast">
@@ -132,11 +114,8 @@ export class App {
     });
   }
 
-  // ── Generation ──
-
   async _startGeneration() {
     this._setState(STATES.GENERATING);
-    this._abortController = new AbortController();
 
     try {
       if (this.mode === 'fast') {
@@ -163,7 +142,6 @@ export class App {
 
     this._showProgress(strings.actions.generating);
 
-    // Fast mode: play directly via Web Speech API (no audio data to store)
     await this.browserTTS.speak(this.chunks, 0, (current, total) => {
       this._showProgress(
         strings.progress.generating
@@ -175,18 +153,20 @@ export class App {
   }
 
   async _generateQuality() {
-    // Use worker for off-thread processing
     this.worker = new TTSWorkerManager();
     await this.worker.init();
 
-    // Download voice model
     this._showProgress(strings.voice.downloading, 0);
     await this.worker.downloadVoice('pt_BR-faber-medium', (progress) => {
-      this._showProgress(strings.voice.downloadProgress.replace('{percent}', Math.round(progress * 100)), progress);
+      this._showProgress(
+        strings.voice.downloadProgress.replace('{percent}', Math.round(progress * 100)),
+        progress,
+      );
     });
 
-    // Generate audio for all chunks
-    this.audioSegments = await this.worker.generateAll(this.chunks, (current, total) => {
+    // Generate WAV Blobs via worker (returns Float32Array PCM after decoding WAV)
+    this.wavBlobs = [];
+    const pcmSegments = await this.worker.generateAll(this.chunks, (current, total) => {
       this._showProgress(
         strings.progress.generating
           .replace('{current}', current)
@@ -194,15 +174,22 @@ export class App {
         current / total,
       );
     });
-  }
 
-  // ── Playback (quality mode only — fast mode plays during generation) ──
+    // Store as { audio: Float32Array } for playback/encoding
+    this.wavBlobs = pcmSegments;
+  }
 
   _startPlayback() {
     this._setState(STATES.PLAYING);
 
-    const segments = this.audioSegments.map((audio) => ({ audio }));
-    this.player.playSegments(segments);
+    // For quality mode: reconstruct WAV Blobs from PCM for playback
+    if (this.mode === 'quality' && this.wavBlobs.length > 0) {
+      const wavBlobsForPlayback = this.wavBlobs.map((pcm) => {
+        const audio = pcm.audio || pcm;
+        return encodeWav(audio, 22050);
+      });
+      this.player.playSegments(wavBlobsForPlayback);
+    }
 
     this.player.onSegmentChange((current, total) => {
       this._updatePlaybackUI(current, total);
@@ -232,12 +219,10 @@ export class App {
     this._setState(STATES.COMPLETE);
   }
 
-  // ── Download ──
-
   async _downloadMp3() {
     this._showProgress(strings.progress.encoding);
-    const audio = concatenateAudio(this.audioSegments);
-    const blob = await encodeMp3(audio);
+    const { audio, sampleRate } = await concatenateAudio(this.wavBlobs);
+    const blob = await encodeMp3(audio, sampleRate);
     const name = this.file.name.replace(/\.[^.]+$/, '') + '.mp3';
     downloadBlob(blob, name);
     this._render();
@@ -245,22 +230,17 @@ export class App {
 
   async _downloadWav() {
     this._showProgress(strings.progress.encoding);
-    const audio = concatenateAudio(this.audioSegments);
-    const blob = encodeWav(audio);
+    const { audio, sampleRate } = await concatenateAudio(this.wavBlobs);
+    const blob = encodeWav(audio, sampleRate);
     const name = this.file.name.replace(/\.[^.]+$/, '') + '.wav';
     downloadBlob(blob, name);
     this._render();
   }
 
-  // ── Rendering ──
-
   _render() {
     switch (this.state) {
       case STATES.MODE_SELECT:
         this._renderModeSelect();
-        break;
-      case STATES.GENERATING:
-        // Progress already shown by _showProgress
         break;
       case STATES.PLAYING:
       case STATES.PAUSED:
@@ -323,7 +303,7 @@ export class App {
     this.playerArea.style.display = '';
     this.progressArea.style.display = '';
 
-    const hasAudio = this.audioSegments.length > 0;
+    const hasAudio = this.wavBlobs.length > 0;
     const isFastMode = this.mode === 'fast';
 
     this.playerArea.innerHTML = `
@@ -335,6 +315,9 @@ export class App {
             <button id="btn-download-mp3" class="btn-secondary">${strings.actions.download}</button>
             <button id="btn-download-wav" class="btn-secondary">${strings.actions.downloadWav}</button>
           </div>
+        ` : ''}
+        ${isFastMode ? `
+          <p class="mode-info">${strings.errors.browserTtsNoExport}</p>
         ` : ''}
       </div>
     `;
@@ -358,8 +341,6 @@ export class App {
       this._reset();
     });
   }
-
-  // ── Helpers ──
 
   _showProgress(message, progress) {
     this.progressArea.style.display = '';
@@ -414,10 +395,9 @@ export class App {
     this.rawText = '';
     this.segments = [];
     this.chunks = [];
-    this.audioSegments = [];
+    this.wavBlobs = [];
     this.mode = null;
     this.browserTTS = null;
-    this.neuralTTS = null;
     this.worker = null;
     this._setState(STATES.IDLE);
     this._showUpload();

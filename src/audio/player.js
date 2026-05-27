@@ -1,10 +1,10 @@
-// AudioPlayer — progressive audio playback via Web Audio API
-// Handles segment queue, speed control, pause/resume, time tracking
+// AudioPlayer — progressive playback via Web Audio API
+// Accepts WAV Blobs or Float32Array PCM segments
 
 export class AudioPlayer {
   constructor() {
-    this.ctx = null; // AudioContext — lazy init on user gesture
-    this.queue = []; // { audio: Float32Array, sampleRate: number }
+    this.ctx = null;
+    this.queue = [];
     this.currentIndex = 0;
     this.source = null;
     this._playing = false;
@@ -15,7 +15,6 @@ export class AudioPlayer {
     this._onComplete = null;
     this._onSegmentChange = null;
     this._rafId = null;
-    this.sampleRate = 22050; // Piper default
   }
 
   get playing() {
@@ -30,19 +29,13 @@ export class AudioPlayer {
     this._speed = Math.max(0.5, Math.min(3.0, rate));
   }
 
-  /**
-   * Set callbacks
-   */
   onProgress(cb) { this._onProgress = cb; }
   onComplete(cb) { this._onComplete = cb; }
   onSegmentChange(cb) { this._onSegmentChange = cb; }
 
-  /**
-   * Initialize AudioContext (must be called from user gesture)
-   */
   _ensureContext() {
     if (!this.ctx) {
-      this.ctx = new AudioContext({ sampleRate: this.sampleRate });
+      this.ctx = new AudioContext();
     }
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -50,19 +43,35 @@ export class AudioPlayer {
   }
 
   /**
-   * Load audio segments into queue and start playback
+   * Load WAV Blobs or { audio: Float32Array } segments and play
    */
   async playSegments(segments) {
     this.stop();
-    this.queue = segments;
+    this.queue = [];
     this.currentIndex = 0;
     this._pauseOffset = 0;
+
+    // Decode all segments upfront (WAV Blobs → AudioBuffers)
+    this._ensureContext();
+    for (const seg of segments) {
+      if (seg instanceof Blob) {
+        const buf = await seg.arrayBuffer();
+        const audioBuffer = await this.ctx.decodeAudioData(buf);
+        this.queue.push(audioBuffer);
+      } else if (seg.audio instanceof Float32Array) {
+        const audioBuffer = this.ctx.createBuffer(1, seg.audio.length, seg.sampleRate || 22050);
+        audioBuffer.getChannelData(0).set(seg.audio);
+        this.queue.push(audioBuffer);
+      } else if (seg instanceof Float32Array) {
+        const audioBuffer = this.ctx.createBuffer(1, seg.length, 22050);
+        audioBuffer.getChannelData(0).set(seg);
+        this.queue.push(audioBuffer);
+      }
+    }
+
     await this._playCurrent();
   }
 
-  /**
-   * Play current segment from a specific offset
-   */
   async _playCurrent() {
     if (this.currentIndex >= this.queue.length) {
       this._playing = false;
@@ -72,13 +81,7 @@ export class AudioPlayer {
 
     this._ensureContext();
 
-    const segment = this.queue[this.currentIndex];
-    const audio = segment.audio || segment;
-    const sampleRate = segment.sampleRate || this.sampleRate;
-
-    const buffer = this.ctx.createBuffer(1, audio.length, sampleRate);
-    buffer.getChannelData(0).set(audio);
-
+    const buffer = this.queue[this.currentIndex];
     this.source = this.ctx.createBufferSource();
     this.source.buffer = buffer;
     this.source.playbackRate.value = this._speed;
@@ -101,66 +104,49 @@ export class AudioPlayer {
     this._trackProgress();
   }
 
-  /**
-   * Pause playback
-   */
   pause() {
     if (!this._playing) return;
     this._playing = false;
-
     if (this.source) {
       this.source.onended = null;
       this.source.stop();
       this.source = null;
     }
-
     this._pauseOffset = (this.ctx.currentTime - this._startTime) * this._speed;
     cancelAnimationFrame(this._rafId);
   }
 
-  /**
-   * Resume playback
-   */
   resume() {
     if (this._playing) return;
     this._playCurrent();
   }
 
-  /**
-   * Stop and reset
-   */
   stop() {
     this._playing = false;
-
     if (this.source) {
       this.source.onended = null;
       try { this.source.stop(); } catch {}
       this.source = null;
     }
-
     cancelAnimationFrame(this._rafId);
     this.queue = [];
     this.currentIndex = 0;
     this._pauseOffset = 0;
   }
 
-  /**
-   * Track progress via requestAnimationFrame
-   */
   _trackProgress() {
     if (!this._playing || !this._onProgress) return;
 
     const elapsed = (this.ctx.currentTime - this._startTime) * this._speed;
-    const currentDuration = this.queue[this.currentIndex]
-      ? (this.queue[this.currentIndex].audio || this.queue[this.currentIndex]).length / this.sampleRate
-      : 0;
+    const buf = this.queue[this.currentIndex];
+    const duration = buf ? buf.duration : 1;
 
     this._onProgress({
       segmentIndex: this.currentIndex,
       totalSegments: this.queue.length,
-      segmentTime: Math.min(elapsed, currentDuration),
-      segmentDuration: currentDuration,
-      overallProgress: (this.currentIndex + elapsed / currentDuration) / this.queue.length,
+      segmentTime: Math.min(elapsed, duration),
+      segmentDuration: duration,
+      overallProgress: (this.currentIndex + Math.min(elapsed, duration) / duration) / this.queue.length,
     });
 
     this._rafId = requestAnimationFrame(() => this._trackProgress());

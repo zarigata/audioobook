@@ -1,7 +1,5 @@
-// BrowserTTS — Web Speech API wrapper for fast mode (Portuguese voices only)
-// Listen-only: no MP3 export from browser voices (GRD-1)
-
-const CHROME_MAX_UTTERANCE_MS = 15000; // Chrome cuts speech at ~15s
+// BrowserTTS — Web Speech API wrapper for fast mode
+// Handles: async voice loading, lang format variants (pt-BR/pt_br/por-BR), Chrome 15s bug
 
 export class BrowserTTS {
   constructor() {
@@ -10,24 +8,16 @@ export class BrowserTTS {
     this.currentUtterance = null;
     this._voicesLoaded = false;
     this._speed = 1.0;
+    this._resumeInterval = null;
   }
 
-  /**
-   * Load and filter for Portuguese voices
-   */
   async init() {
     this.voices = await this._loadVoices();
-    const ptVoices = this.voices.filter((v) =>
-      v.lang.startsWith('pt') || v.lang.startsWith('pt-BR'),
-    );
-    // Prefer pt-BR voices
-    ptVoices.sort((a, b) => {
-      if (a.lang === 'pt-BR' && b.lang !== 'pt-BR') return -1;
-      if (b.lang === 'pt-BR' && a.lang !== 'pt-BR') return 1;
-      return 0;
-    });
-    this.voices = ptVoices.length > 0 ? ptVoices : this.voices;
     this._voicesLoaded = true;
+
+    if (this.voices.length === 0) {
+      console.warn('Nenhuma voz em português encontrada');
+    }
   }
 
   get isReady() {
@@ -52,10 +42,6 @@ export class BrowserTTS {
 
   /**
    * Speak a list of text segments sequentially
-   * @param {string[]} segments - Sentences/paragraphs to speak
-   * @param {number} [voiceIndex=0] - Voice index from availableVoices
-   * @param {(index: number, total: number) => void} onProgress
-   * @returns {Promise<void>}
    */
   async speak(segments, voiceIndex = 0, onProgress = () => {}) {
     this.cancel();
@@ -63,50 +49,49 @@ export class BrowserTTS {
     const voice = this.voices[voiceIndex] || this.voices[0];
     if (!voice) throw new Error('Nenhuma voz em português disponível');
 
+    const isNonLocalDesktop = !voice.localService && !this._isAndroid();
+
     for (let i = 0; i < segments.length; i++) {
-      if (!this.currentUtterance) break; // cancelled
+      if (!this.currentUtterance) break;
 
       onProgress(i, segments.length);
-      await this._speakSegment(segments[i], voice);
+      await this._speakSegment(segments[i], voice, isNonLocalDesktop);
     }
 
     onProgress(segments.length, segments.length);
   }
 
   /**
-   * Speak a single segment, working around Chrome's 15s cutoff
+   * Speak one segment, working around Chrome's 15s cutoff on non-local voices
    */
-  _speakSegment(text, voice) {
+  _speakSegment(text, voice, needsChromeWorkaround) {
     return new Promise((resolve, reject) => {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.voice = voice;
       utterance.rate = this._speed;
       utterance.lang = voice.lang;
 
-      // Chrome workaround: resume synth on boundary events
-      // Chrome pauses synthesis after ~15s of continuous speech
-      let lastBoundary = Date.now();
-      const resumeInterval = setInterval(() => {
-        if (Date.now() - lastBoundary > 10000) {
-          this.synth.pause();
-          this.synth.resume();
-          lastBoundary = Date.now();
-        }
-      }, 10000);
-
-      utterance.onboundary = () => {
-        lastBoundary = Date.now();
-      };
+      // Chrome desktop workaround: pause/resume every 10s for cloud voices
+      if (needsChromeWorkaround) {
+        this._resumeInterval = setInterval(() => {
+          if (this.synth.speaking && !this.synth.paused) {
+            this.synth.pause();
+            this.synth.resume();
+          }
+        }, 10000);
+      }
 
       utterance.onend = () => {
-        clearInterval(resumeInterval);
+        clearInterval(this._resumeInterval);
+        this._resumeInterval = null;
         resolve();
       };
 
       utterance.onerror = (e) => {
-        clearInterval(resumeInterval);
+        clearInterval(this._resumeInterval);
+        this._resumeInterval = null;
         if (e.error === 'canceled' || e.error === 'interrupted') {
-          resolve(); // Normal cancel
+          resolve();
         } else {
           reject(new Error(`Erro na síntese: ${e.error}`));
         }
@@ -117,53 +102,100 @@ export class BrowserTTS {
     });
   }
 
-  /**
-   * Cancel current speech
-   */
   cancel() {
+    clearInterval(this._resumeInterval);
+    this._resumeInterval = null;
     this.currentUtterance = null;
     this.synth.cancel();
   }
 
-  /**
-   * Pause current speech
-   */
   pause() {
+    if (this._isAndroid()) return; // pause() = cancel() on Android
     this.synth.pause();
   }
 
-  /**
-   * Resume current speech
-   */
   resume() {
+    if (this._isAndroid()) return;
     this.synth.resume();
   }
 
   /**
-   * Load voices — handles async voice loading in some browsers
+   * Normalize voice.lang to handle browser variants:
+   * - Chrome/Edge/Safari/Firefox desktop: "pt-BR"
+   * - Chrome Android: "pt_br"
+   * - Firefox Android: "por-BR-f000"
+   */
+  _normalizeLang(lang) {
+    if (!lang) return '';
+    const lower = lang.toLowerCase();
+
+    // Handle 3-letter codes: por→pt
+    const threeLetter = lower.match(/^([a-z]{3})[_-]/);
+    if (threeLetter) {
+      const map = { por: 'pt', eng: 'en', deu: 'de', fra: 'fr', spa: 'es' };
+      const mapped = map[threeLetter[1]];
+      if (mapped) return lower.replace(threeLetter[1], mapped);
+    }
+
+    return lower;
+  }
+
+  _isPortuguese(voice) {
+    const normalized = this._normalizeLang(voice.lang);
+    return normalized.startsWith('pt');
+  }
+
+  _isBrazilian(voice) {
+    const normalized = this._normalizeLang(voice.lang);
+    return normalized.includes('br');
+  }
+
+  _isAndroid() {
+    return /android/i.test(navigator.userAgent);
+  }
+
+  /**
+   * Load voices with async handling
    */
   _loadVoices() {
     return new Promise((resolve) => {
-      let voices = this.synth.getVoices();
-      if (voices.length > 0) {
-        resolve(voices);
+      const allVoices = this.synth.getVoices();
+
+      const filterPortuguese = (voices) => {
+        const ptVoices = voices.filter((v) => this._isPortuguese(v));
+
+        // Sort: pt-BR first, then local voices first (no Chrome 15s bug)
+        ptVoices.sort((a, b) => {
+          const aBR = this._isBrazilian(a) ? 0 : 1;
+          const bBR = this._isBrazilian(b) ? 0 : 1;
+          if (aBR !== bBR) return aBR - bBR;
+
+          const aLocal = a.localService ? 0 : 1;
+          const bLocal = b.localService ? 0 : 1;
+          return aLocal - bLocal;
+        });
+
+        return ptVoices;
+      };
+
+      if (allVoices.length > 0) {
+        resolve(filterPortuguese(allVoices));
         return;
       }
 
       const onVoicesChanged = () => {
-        voices = this.synth.getVoices();
+        const voices = this.synth.getVoices();
         if (voices.length > 0) {
           this.synth.removeEventListener('voiceschanged', onVoicesChanged);
-          resolve(voices);
+          resolve(filterPortuguese(voices));
         }
       };
 
       this.synth.addEventListener('voiceschanged', onVoicesChanged);
 
-      // Timeout fallback: some browsers never fire voiceschanged
       setTimeout(() => {
         this.synth.removeEventListener('voiceschanged', onVoicesChanged);
-        resolve(this.synth.getVoices());
+        resolve(filterPortuguese(this.synth.getVoices()));
       }, 3000);
     });
   }

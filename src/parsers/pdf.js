@@ -5,9 +5,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
-/**
- * Parse PDF to text, batching 10 pages at a time
- */
 export async function parsePdf(file, onProgress) {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
