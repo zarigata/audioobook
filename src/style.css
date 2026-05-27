@@ -45,6 +45,282 @@ main {
   margin-bottom: 2rem;
 }
 
+/* Upload dropzone */
+.upload-dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 3rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: var(--surface);
+  user-select: none;
+}
+
+.upload-dropzone:hover,
+.upload-dropzone.drag-over {
+  border-color: var(--primary);
+  background: #fff8f5;
+}
+
+.upload-dropzone.drag-over {
+  transform: scale(1.01);
+}
+
+.upload-dropzone.has-file {
+  border-color: #4caf50;
+  border-style: solid;
+  background: #f8fff8;
+}
+
+.upload-icon {
+  font-size: 3rem;
+  margin-bottom: 0.75rem;
+  line-height: 1;
+}
+
+.upload-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.upload-subtitle {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin-bottom: 0.25rem;
+}
+
+.upload-formats {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-top: 0.5rem;
+}
+
+.upload-error {
+  color: #d32f2f;
+  font-size: 0.9rem;
+  margin-top: 0.75rem;
+  animation: shake 0.3s ease;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+/* Buttons */
+.btn-primary {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.btn-secondary {
+  display: inline-block;
+  padding: 0.6rem 1.2rem;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-secondary:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* Mode selection */
+.mode-select {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.mode-info {
+  color: var(--text-muted);
+  margin-bottom: 1rem;
+}
+
+.mode-select h3 {
+  margin-bottom: 1rem;
+}
+
+.mode-buttons {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 1.25rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.mode-btn:hover {
+  border-color: var(--primary);
+  background: #fff8f5;
+}
+
+.mode-btn strong {
+  display: block;
+  font-size: 1.05rem;
+  margin-bottom: 0.35rem;
+}
+
+.mode-btn span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+/* Progress */
+.progress {
+  text-align: center;
+  padding: 2rem 0;
+}
+
+.progress-text {
+  margin-bottom: 1rem;
+  font-size: 1.05rem;
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  max-width: 400px;
+  margin: 0 auto;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+/* Error */
+.error {
+  text-align: center;
+  padding: 2rem 0;
+}
+
+.error p {
+  color: #d32f2f;
+  margin-bottom: 1rem;
+  font-size: 1.05rem;
+}
+
+/* Player */
+.player {
+  padding: 1.5rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.player-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.player-file {
+  font-weight: 600;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.player-segment {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.player-controls {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.player-speed {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.player-speed label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.player-speed input[type="range"] {
+  width: 120px;
+  accent-color: var(--primary);
+}
+
+.player.complete {
+  text-align: center;
+}
+
+.complete-title {
+  font-size: 1.2rem;
+  margin-bottom: 1rem;
+  color: #4caf50;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  body {
+    padding: 1rem 0.75rem;
+  }
+
+  header h1 {
+    font-size: 1.5rem;
+  }
+
+  .mode-buttons {
+    flex-direction: column;
+  }
+
+  .player-file {
+    max-width: 100%;
+  }
+
+  .upload-dropzone {
+    padding: 2rem 1rem;
+  }
+}
+
 footer {
   text-align: center;
   color: var(--text-muted);
