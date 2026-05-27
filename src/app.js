@@ -42,6 +42,7 @@ export class App {
     this.uploadArea = document.getElementById('upload-area');
     this.playerArea = document.getElementById('player-area');
     this.progressArea = document.getElementById('progress-area');
+    this._playerBuilt = false;
     this._initDarkMode();
     this._initKeyboardShortcuts();
     this._showUpload();
@@ -354,16 +355,16 @@ export class App {
 
     this.player.play();
 
-    this.player.onSegmentChange(() => this._render());
-    this.player.onProgress(() => this._render());
+    this.player.onSegmentChange(() => this._updatePlayer());
+    this.player.onProgress(() => this._updatePlayer());
     this.player.onComplete(() => {
       this._setState(STATES.COMPLETE);
       showToast(strings.toast.generationComplete, 'success');
     });
   }
 
-  _pausePlayback() { this.player.pause(); this.state = STATES.PAUSED; this._render(); }
-  _resumePlayback() { this.player.resume(); this.state = STATES.PLAYING; this._render(); }
+  _pausePlayback() { this.player.pause(); this.state = STATES.PAUSED; this._updatePlayer(); }
+  _resumePlayback() { this.player.resume(); this.state = STATES.PLAYING; this._updatePlayer(); }
   _stopPlayback() { this.player.stop(); this._setState(STATES.COMPLETE); }
 
   // ── Download with quality selector ──
@@ -387,10 +388,16 @@ export class App {
   // ── Rendering ──
 
   _render() {
+    if (this.state !== STATES.PLAYING && this.state !== STATES.PAUSED) {
+      this._playerBuilt = false;
+    }
     switch (this.state) {
       case STATES.PREVIEW: this._renderPreview(); break;
       case STATES.MODE_SELECT: this._renderModeSelect(); break;
-      case STATES.PLAYING: case STATES.PAUSED: this._renderPlayer(); break;
+      case STATES.PLAYING: case STATES.PAUSED:
+        if (!this._playerBuilt) this._buildPlayer();
+        this._updatePlayer();
+        break;
       case STATES.COMPLETE: this._renderComplete(); break;
     }
   }
@@ -401,16 +408,11 @@ export class App {
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
-  _renderPlayer() {
+  _buildPlayer() {
     this.uploadArea.style.display = 'none';
     this.playerArea.style.display = '';
     this.progressArea.style.display = 'none';
 
-    const isPlaying = this.state === STATES.PLAYING;
-    const elapsed = this.player.elapsedDuration;
-    const total = this.player.totalDuration;
-    const overallPct = total > 0 ? (elapsed / total * 100) : 0;
-    const currentSpeed = this.player.speed;
     const isDark = document.documentElement.classList.contains('dark');
 
     this.playerArea.innerHTML = `
@@ -423,38 +425,37 @@ export class App {
         </div>
 
         <div class="player-segment-row">
-          <span>${strings.player.segmentOf.replace('{current}', this.player.currentSegmentIndex + 1).replace('{total}', this.player.totalSegments)}</span>
+          <span id="segment-label"></span>
         </div>
 
         <div class="seek-bar-container" id="seek-bar">
-          <div class="seek-bar-fill" style="width:${overallPct}%"></div>
+          <div class="seek-bar-fill" id="seek-bar-fill"></div>
         </div>
         <div class="time-row">
-          <span>${this._formatTime(elapsed)}</span>
-          <span>${this._formatTime(total)}</span>
+          <span id="time-elapsed">0:00</span>
+          <span id="time-total">0:00</span>
         </div>
 
         <div class="player-controls">
           <button class="btn-control" id="btn-skip-back" title="-10s">⏪</button>
-          <button class="btn-primary btn-lg" id="btn-play-pause">${isPlaying ? '⏸' : '▶'}</button>
+          <button class="btn-primary btn-lg" id="btn-play-pause">▶</button>
           <button class="btn-control" id="btn-skip-forward" title="+10s">⏩</button>
           <button class="btn-control" id="btn-stop" title="${strings.actions.stop}">⏹</button>
         </div>
 
         <div class="speed-presets">
-          ${SPEED_PRESETS.map(s => `<button class="btn-speed ${s === currentSpeed ? 'active' : ''}" data-speed="${s}">${s}x</button>`).join('')}
+          ${SPEED_PRESETS.map(s => `<button class="btn-speed" data-speed="${s}">${s}x</button>`).join('')}
         </div>
 
-        <div class="segment-list" id="segment-list">
-          ${this._renderSegmentList()}
-        </div>
+        <div class="segment-list" id="segment-list"></div>
 
         <div class="keyboard-hint">${strings.keyboard.space}: play/pause · ←→: ±10s · ↑↓: velocidade · M: escuro</div>
       </div>
     `;
 
     this.playerArea.querySelector('#btn-play-pause').addEventListener('click', () => {
-      if (isPlaying) this._pausePlayback(); else this._resumePlayback();
+      if (this.state === STATES.PLAYING) this._pausePlayback();
+      else if (this.state === STATES.PAUSED) this._resumePlayback();
     });
     this.playerArea.querySelector('#btn-stop').addEventListener('click', () => this._stopPlayback());
     this.playerArea.querySelector('#btn-skip-back').addEventListener('click', () => this.player.skip(-10));
@@ -468,34 +469,86 @@ export class App {
     this.playerArea.querySelectorAll('.btn-speed').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.player.speed = parseFloat(btn.dataset.speed);
-        this._render();
-      });
-    });
-
-    this.playerArea.querySelectorAll('.segment-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        this.player.seekTo(parseInt(item.dataset.index));
+        this._updatePlayer();
       });
     });
 
     this.playerArea.querySelector('#btn-dark-player').addEventListener('click', () => this._toggleDarkMode());
+
+    this._playerBuilt = true;
   }
 
-  _renderSegmentList() {
+  _updatePlayer() {
+    if (!this._playerBuilt) return;
+
+    const isPlaying = this.state === STATES.PLAYING;
+    const elapsed = this.player.elapsedDuration;
+    const total = this.player.totalDuration;
+    const overallPct = total > 0 ? (elapsed / total * 100) : 0;
+    const currentSpeed = this.player.speed;
+
+    const playPauseBtn = this.playerArea.querySelector('#btn-play-pause');
+    if (playPauseBtn) playPauseBtn.textContent = isPlaying ? '⏸' : '▶';
+
+    const segmentLabel = this.playerArea.querySelector('#segment-label');
+    if (segmentLabel) {
+      segmentLabel.textContent = strings.player.segmentOf
+        .replace('{current}', this.player.currentSegmentIndex + 1)
+        .replace('{total}', this.player.totalSegments);
+    }
+
+    const seekFill = this.playerArea.querySelector('#seek-bar-fill');
+    if (seekFill) seekFill.style.width = `${overallPct}%`;
+
+    const elapsedEl = this.playerArea.querySelector('#time-elapsed');
+    if (elapsedEl) elapsedEl.textContent = this._formatTime(elapsed);
+
+    const totalEl = this.playerArea.querySelector('#time-total');
+    if (totalEl) totalEl.textContent = this._formatTime(total);
+
+    this.playerArea.querySelectorAll('.btn-speed').forEach((btn) => {
+      btn.classList.toggle('active', parseFloat(btn.dataset.speed) === currentSpeed);
+    });
+
+    const segmentList = this.playerArea.querySelector('#segment-list');
+    if (segmentList) {
+      const currentIdx = this.player.currentSegmentIndex;
+      const items = segmentList.querySelectorAll('.segment-item');
+      if (items.length !== Math.min(this.player.totalSegments, 20)) {
+        this._rebuildSegmentList(segmentList);
+      } else {
+        items.forEach((item) => {
+          const idx = parseInt(item.dataset.index);
+          if (isNaN(idx)) return;
+          item.className = 'segment-item' + (idx === currentIdx ? ' current' : idx < currentIdx ? ' played' : '');
+          const icon = idx === currentIdx ? '🔊' : idx < currentIdx ? '✓' : '○';
+          item.textContent = `${icon} Segmento ${idx + 1}`;
+        });
+      }
+    }
+  }
+
+  _rebuildSegmentList(container) {
     const maxShow = 20;
-    const items = [];
     const total = this.player.totalSegments;
     const current = this.player.currentSegmentIndex;
 
+    let html = '';
     for (let i = 0; i < Math.min(total, maxShow); i++) {
       const isCurrent = i === current;
       const isPlayed = i < current;
       const cls = isCurrent ? 'current' : isPlayed ? 'played' : '';
       const icon = isCurrent ? '🔊' : isPlayed ? '✓' : '○';
-      items.push(`<div class="segment-item ${cls}" data-index="${i}">${icon} Segmento ${i + 1}</div>`);
+      html += `<div class="segment-item ${cls}" data-index="${i}">${icon} Segmento ${i + 1}</div>`;
     }
-    if (total > maxShow) items.push(`<div class="segment-item more">... e mais ${total - maxShow} segmentos</div>`);
-    return items.join('');
+    if (total > maxShow) html += `<div class="segment-item more">... e mais ${total - maxShow} segmentos</div>`;
+    container.innerHTML = html;
+
+    container.querySelectorAll('.segment-item[data-index]').forEach((item) => {
+      item.addEventListener('click', () => {
+        this.player.seekTo(parseInt(item.dataset.index));
+      });
+    });
   }
 
   _renderComplete() {
