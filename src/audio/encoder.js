@@ -1,9 +1,5 @@
-// AudioEncoder — MP3 (lamejs) and WAV encoding for audio export
-// Handles both Float32Array PCM and WAV Blob inputs
+// AudioEncoder — MP3 (lamejs) and WAV encoding, normalization, silence trimming
 
-/**
- * Encode Float32 PCM to WAV Blob
- */
 export function encodeWav(audioData, sampleRate = 22050) {
   const numSamples = audioData.length;
   const buffer = new ArrayBuffer(44 + numSamples * 2);
@@ -33,9 +29,6 @@ export function encodeWav(audioData, sampleRate = 22050) {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
-/**
- * Encode Float32 PCM to MP3 Blob via lamejs
- */
 export async function encodeMp3(audioData, sampleRate = 22050, bitrate = 128) {
   const { default: lamejs } = await import('@breezystack/lamejs');
 
@@ -56,17 +49,11 @@ export async function encodeMp3(audioData, sampleRate = 22050, bitrate = 128) {
   return new Blob(mp3Chunks, { type: 'audio/mp3' });
 }
 
-/**
- * Decode a WAV Blob into Float32Array PCM
- */
 export async function decodeWavBlob(wavBlob) {
   const arrayBuffer = await wavBlob.arrayBuffer();
   const dataView = new DataView(arrayBuffer);
-
-  // Read sample rate from WAV header (bytes 24-27)
   const sampleRate = dataView.getUint32(24, true);
 
-  // Find the "data" chunk
   let dataOffset = 12;
   let dataLength = 0;
   while (dataOffset < arrayBuffer.byteLength - 8) {
@@ -99,9 +86,6 @@ export async function decodeWavBlob(wavBlob) {
   return { audio: float32, sampleRate };
 }
 
-/**
- * Concatenate multiple audio inputs (WAV Blobs or Float32Arrays) into one Float32Array
- */
 export async function concatenateAudio(chunks) {
   const decoded = [];
 
@@ -129,9 +113,6 @@ export async function concatenateAudio(chunks) {
   return { audio: result, sampleRate };
 }
 
-/**
- * Trigger browser download of a blob
- */
 export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -141,6 +122,101 @@ export function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * Normalize audio to a target peak level (default -1 dB).
+ * Makes all segments the same volume.
+ */
+export function normalizeAudio(audioData, targetDb = -1) {
+  let peak = 0;
+  for (let i = 0; i < audioData.length; i++) {
+    const abs = Math.abs(audioData[i]);
+    if (abs > peak) peak = abs;
+  }
+
+  if (peak === 0) return audioData;
+
+  const targetLinear = Math.pow(10, targetDb / 20);
+  const gain = targetLinear / peak;
+
+  const result = new Float32Array(audioData.length);
+  for (let i = 0; i < audioData.length; i++) {
+    result[i] = Math.max(-1, Math.min(1, audioData[i] * gain));
+  }
+
+  return result;
+}
+
+/**
+ * Trim silence from audio — remove samples below threshold for longer than minSilenceMs.
+ * Keeps minPaddingMs of silence at start and end of each segment.
+ */
+export function trimSilence(audioData, sampleRate = 22050, options = {}) {
+  const {
+    threshold = 0.01,
+    minSilenceMs = 500,
+    minPaddingMs = 150,
+  } = options;
+
+  const minSilenceSamples = Math.floor(sampleRate * minSilenceMs / 1000);
+  const paddingSamples = Math.floor(sampleRate * minPaddingMs / 1000);
+
+  // Find where audio starts and ends (above threshold)
+  let start = 0;
+  while (start < audioData.length && Math.abs(audioData[start]) < threshold) start++;
+
+  let end = audioData.length - 1;
+  while (end > start && Math.abs(audioData[end]) < threshold) end--;
+
+  if (start >= end) return audioData;
+
+  // Add padding
+  start = Math.max(0, start - paddingSamples);
+  end = Math.min(audioData.length - 1, end + paddingSamples);
+
+  // Find internal silence runs longer than minSilenceMs and trim them to paddingSamples
+  const result = [];
+  let silenceStart = -1;
+  let regionStart = start;
+
+  for (let i = start; i <= end; i++) {
+    const isSilent = Math.abs(audioData[i]) < threshold;
+
+    if (isSilent && silenceStart === -1) {
+      silenceStart = i;
+    } else if (!isSilent && silenceStart !== -1) {
+      const silenceLength = i - silenceStart;
+      if (silenceLength > minSilenceSamples) {
+        // Keep audio before silence
+        if (silenceStart > regionStart) {
+          result.push(audioData.slice(regionStart, silenceStart));
+        }
+        // Add shortened silence
+        result.push(new Float32Array(Math.min(paddingSamples * 2, silenceLength)));
+        regionStart = i;
+      }
+      silenceStart = -1;
+    }
+  }
+
+  // Add remaining audio
+  if (regionStart < end) {
+    result.push(audioData.slice(regionStart, end + 1));
+  }
+
+  // Concatenate result pieces
+  let totalLength = 0;
+  for (const piece of result) totalLength += piece.length;
+
+  const output = new Float32Array(totalLength);
+  let offset = 0;
+  for (const piece of result) {
+    output.set(piece, offset);
+    offset += piece.length;
+  }
+
+  return output;
 }
 
 function float32ToInt16(float32) {
